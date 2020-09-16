@@ -1,0 +1,86 @@
+- hosts: localhost
+  vars_files:
+    - variables.yml
+  tasks:
+    - name: Finding the running instances count
+      shell: aws ec2 describe-instances --filters Name=instance-state-name,Values=running --query "Reservations[*].Instances[*].InstanceId" --output text | wc -w
+      register: variable1
+
+    - name: Showing the number of running instances
+      debug:
+        msg: "{{ variable1.stdout }}"
+
+    - name: Launching an instance only if number of running instances is equal to ONE in number, otherwise skipped
+      ec2:
+        instance_type: t2.micro
+        key_name: "{{ key_name_value }}"
+        image: ami-09a7bbd08886aafdf
+        count: 1
+        assign_public_ip: yes
+        region: "{{ region_value }}"
+        wait: yes                              # Waiting till the instance is finally available in the desired state
+        vpc_subnet_id: "{{ subnet_id_value }}"
+      when: variable1.stdout == "1"
+      notify: "Doing the further operations now"
+
+  handlers:
+  - name: Gathering the running instances info
+    ec2_instance_info:
+       region: "{{ region_value }}"
+    register: ec2_info
+    listen: "Doing the further operations now"
+
+  - name: Showing the info about instances
+    debug: msg="{{item.instance_id}}"
+    with_items: "{{ec2_info.instances}}"
+    listen: "Doing the further operations now"
+
+ # Following a deployment strategy now, like Recreate, Rolling Update as we have in k8s to update the image for deployment
+ # Here following the Recreate Strategy even though it's not a recommended one due to downtime issue
+
+  - name: Terminating the instances with kind of older version image
+    ec2:
+       instance_ids: "{{item.instance_id}}"
+       region: "{{ region_value }}"
+       state: absent
+       wait: yes
+    with_items: "{{ec2_info.instances}}"
+    listen: "Doing the further operations now"
+
+ # Took a different image now, instead of using a different version of same old image, as of here
+
+  - name: Updating the instances and relaunching with the newer versioned image
+    ec2:
+       instance_type: t2.micro
+       key_name: "{{ key_name_value }}"
+       image: ami-09052aa9bc337c78d
+       count: 2
+       assign_public_ip: yes
+       wait: yes
+       region: "{{ region_value }}"
+       vpc_subnet_id: "{{ subnet_id_value }}"
+    listen: "Doing the further operations now"
+
+  - name: Getting the final available instances count
+    shell: aws ec2 describe-instances --filters Name=instance-state-name,Values=running --query "Reservations[*].Instances[*].InstanceId" --output text | wc -w
+    register: variable2
+    listen: "Doing the further operations now"
+
+  - name: Getting the first instance ID
+    shell: aws ec2 describe-instances --filters Name=instance-state-name,Values=running --query "Reservations[*].Instances[0].InstanceId" --output text
+    register: variable3
+    listen: "Doing the further operations now"
+
+  - name: Showing the No. of available instances
+    debug:
+       msg: "{{ variable2.stdout }}"
+    listen: "Doing the further operations now"
+
+  - name: Removing an instance and getting back to original count if no. of running instances is equal to TWO
+    ec2:
+       instance_id: "{{ variable3.stdout }}"
+       state: absent
+       region: "{{ region_value }}"
+       wait: yes
+    when: variable2.stdout == "2"
+    listen: "Doing the further operations now"
